@@ -11,7 +11,8 @@ const client = new OpenAI({
 });
 
 const MODEL = "gpt-5.4-mini";
-const MAX_APPS_PER_REQUEST = 10;
+// Increased max apps to 15
+const MAX_APPS_PER_REQUEST = 15;
 
 app.post("/scan-apps", async (req, res) => {
   try {
