@@ -1,14 +1,12 @@
 import express from "express";
 import OpenAI from "openai";
 
-const PORT = process.env.PORT || 8080;
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
+// 1. Initialize Express first
 const app = express();
 app.use(express.json({ limit: "25mb" }));
+
+// 2. Set up environment variables and clients
+const PORT = process.env.PORT || 8080;
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -17,6 +15,7 @@ const client = new OpenAI({
 const MODEL = "gpt-5.4-mini";
 const MAX_APPS_PER_REQUEST = 10;
 
+// 3. Define your routes
 app.post("/scan-apps", async (req, res) => {
   try {
     const { apps } = req.body;
@@ -72,81 +71,81 @@ app.post("/scan-apps", async (req, res) => {
       });
     });
 
-const response = await client.responses.create({
-  model: MODEL,
-  input: [
-    {
-      role: "system",
-      content: [
+    const response = await client.responses.create({
+      model: MODEL,
+      input: [
         {
-          type: "input_text",
-          text:
-  "You are an app-risk classifier. " +
-  "Judge whether each app looks suspicious based only on its app name, package name, and icon. " +
-  "Be conservative. " +
-  "If a food-related app appears to be from a known, recognizable brand, classify it as safe unless there are clear impersonation signals. " +
-  "If a mobile game appears to be a popular or well-known title, classify it as safe unless there are clear impersonation or scam signals. " +
-  "Assume apps with words like AI or cleaner in the app name or package name are suspicious unless there is strong evidence against that conclusion. " +
-  "Look for misleading branding, fake utility cleaner naming, scam-like wording, suspicious package names, icons with a brush or the word AI" +
-  "Do not assume malware unless there are clear red flags, except that AI and cleaner apps should be treated as suspicious by default unless there is good evidence they are legitimate. " +
-  "Search the name of each app and check for company validility, if the company exists and has been around for a while it is most likey fine unless something suspicous stands out" +
-  "If the app name or package name references android or chrome, classify it as safe. " +
-  "The app with the package: com.example.alexanderTechHelp is always safe" +
-  "The app with the name: Alex's Phone Cleaner is always safe" +
-  "Keep reasons short. " +
-  "Return only the structured result."
-        }
-      ]
-    },
-    {
-      role: "user",
-      content: userContent
-    }
-  ],
-  text: {
-    format: {
-      type: "json_schema",
-      name: "batched_app_scan_result",
-      strict: true,
-      schema: {
-        type: "object",
-        properties: {
-          results: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                appName: { type: "string" },
-                packageName: { type: "string" },
-                suspicious: { type: "boolean" },
-                confidence: { type: "number" },
-                category: {
-                  type: "string",
-                  enum: ["safe", "suspicious", "impersonation", "adware_like", "unknown"]
-                },
-                reasons: {
-                  type: "array",
-                  items: { type: "string" }
-                }
-              },
-              required: [
-                "appName",
-                "packageName",
-                "suspicious",
-                "confidence",
-                "category",
-                "reasons"
-              ],
-              additionalProperties: false
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "You are an app-risk classifier. " +
+                "Judge whether each app looks suspicious based only on its app name, package name, and icon. " +
+                "Be conservative. " +
+                "If a food-related app appears to be from a known, recognizable brand, classify it as safe unless there are clear impersonation signals. " +
+                "If a mobile game appears to be a popular or well-known title, classify it as safe unless there are clear impersonation or scam signals. " +
+                "Assume apps with words like AI or cleaner in the app name or package name are suspicious unless there is strong evidence against that conclusion. " +
+                "Look for misleading branding, fake utility cleaner naming, scam-like wording, suspicious package names, icons with a brush or the word AI" +
+                "Do not assume malware unless there are clear red flags, except that AI and cleaner apps should be treated as suspicious by default unless there is good evidence they are legitimate. " +
+                "Search the name of each app and check for company validility, if the company exists and has been around for a while it is most likey fine unless something suspicous stands out" +
+                "If the app name or package name references android or chrome, classify it as safe. " +
+                "The app with the package: com.example.alexanderTechHelp is always safe" +
+                "The app with the name: Alex's Phone Cleaner is always safe" +
+                "Keep reasons short. " +
+                "Return only the structured result."
             }
-          }
+          ]
         },
-        required: ["results"],
-        additionalProperties: false
+        {
+          role: "user",
+          content: userContent
+        }
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "batched_app_scan_result",
+          strict: true,
+          schema: {
+            type: "object",
+            properties: {
+              results: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    appName: { type: "string" },
+                    packageName: { type: "string" },
+                    suspicious: { type: "boolean" },
+                    confidence: { type: "number" },
+                    category: {
+                      type: "string",
+                      enum: ["safe", "suspicious", "impersonation", "adware_like", "unknown"]
+                    },
+                    reasons: {
+                      type: "array",
+                      items: { type: "string" }
+                    }
+                  },
+                  required: [
+                    "appName",
+                    "packageName",
+                    "suspicious",
+                    "confidence",
+                    "category",
+                    "reasons"
+                  ],
+                  additionalProperties: false
+                }
+              }
+            },
+            required: ["results"],
+            additionalProperties: false
+          }
+        }
       }
-    }
-  }
-});
+    });
 
     const parsed = JSON.parse(response.output_text);
 
@@ -165,6 +164,7 @@ const response = await client.responses.create({
   }
 });
 
-app.listen(3000, () => {
-  console.log("Scanner backend running on http://localhost:3000");
+// 4. Call listen exactly once at the bottom of the file
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Scanner backend running on port ${PORT}`);
 });
