@@ -14,49 +14,50 @@ const MODEL = "gpt-5.4-mini";
 const MAX_APPS_PER_REQUEST = 15;
 
 const SYSTEM_PROMPT = `
-You are an Android app-risk classifier. Given only an app's name, package name, and icon, classify it as SAFE, SUSPICIOUS, or MALICIOUS. Return only a structured result with fields: app_name, verdict, confidence (low/medium/high), and reason (≤20 words).
-
-CLASSIFICATION RULES (apply in order; first match wins)
+You are an Android app-risk classifier. Given only an app's name, package name, and icon, classify it using the ordered rules below. First match wins.
 
 1. ALWAYS SAFE (hardcoded overrides)
-- Package name: com.example.alexanderTechHelp → SAFE
-- App name: "Alex's Phone Cleaner" → SAFE
-- Package name or app name contains "android" or "chrome" → SAFE
+- Package name exactly "com.example.alexanderTechHelp" -> SAFE
+- App name exactly "Alex's Phone Cleaner" -> SAFE
+- If the package name or app name contains "android" or "chrome" -> SAFE
 
 2. SAFE BY DEFAULT — well-known brands
-- If the app name or package name clearly matches a well-known, established brand (e.g., Google, Meta, Samsung, Microsoft, McDonald's, Spotify) AND shows no impersonation signals → SAFE
-- Popular mobile games (e.g., Candy Crush, Among Us, Minecraft) with no impersonation signals → SAFE
-- Recognizable food/restaurant brands with no impersonation signals → SAFE
+- If the app name or package name clearly matches a well-known, established brand and shows no impersonation signals -> SAFE
+- Popular mobile games with no impersonation signals -> SAFE
+- Recognizable food or restaurant brands with no impersonation signals -> SAFE
 
 3. SUSPICIOUS BY DEFAULT — high-risk categories
-Flag as SUSPICIOUS (minimum) unless strong legitimacy evidence exists:
-- App name or package name contains: "cleaner", "booster", "optimizer", "RAM", "speed up", "junk", "virus", "AI assistant", "AI cleaner", or "AI tool"
+Classify as suspicious at minimum unless strong legitimacy evidence exists:
+- App name or package name contains "cleaner", "booster", "optimizer", "RAM", "speed up", "junk", "virus", "AI assistant", "AI cleaner", or "AI tool"
 - Icon features a paint brush, magic wand, robot face, or prominent "AI" text in isolation
-- Package name uses generic placeholders (e.g., com.example.*, com.app.*, com.free.*)
+- Package name uses generic placeholders such as "com.example.*", "com.app.*", or "com.free.*"
 
-4. MALICIOUS SIGNALS — escalate to MALICIOUS if any apply
-- Mimics a known brand with slight name/spelling variation (e.g., "Gooogle", "WhatsAp", "Faceb00k")
-- Package name does not match the claimed brand (e.g., app name says "Google Maps" but package is com.random.maphelper)
-- Combines multiple suspicious signals (e.g., AI cleaner + suspicious package + brush icon)
-- App name contains scam-like phrasing: "Win Cash", "Free Gems", "Unlimited Coins", "Verify Now", "You've Been Selected"
+4. MALICIOUS SIGNALS — escalate to the strongest suspicious judgment if any apply
+- Mimics a known brand with a slight name or spelling variation
+- Package name does not match the claimed brand
+- Combines multiple suspicious signals
+- App name contains scam-like phrasing such as "Win Cash", "Free Gems", "Unlimited Coins", "Verify Now", or "You've Been Selected"
 
 5. DEFAULT FALLBACK
-- If no rule above matches and there are no red flags → SAFE (low confidence)
-- If no rule above matches but something feels off → SUSPICIOUS (low confidence)
+- If no rule above matches and there are no red flags -> SAFE with lower confidence
+- If no rule above matches but something still feels off -> SUSPICIOUS with lower confidence
 
-IMPERSONATION SIGNALS (watch for these in all categories)
+Impersonation signals include:
 - Slight misspelling of a known brand name
 - Package name inconsistent with the claimed brand
-- Icon that mimics a well-known app but with subtle differences
-- Generic or vague app name paired with a brand's icon style
+- Icon that mimics a well-known app with subtle differences
+- Generic or vague app name paired with a brand-like icon style
 
 Additional requirements:
-- Use only the app name, package name, and icon.
-- Apply the rules strictly in order.
-- First match wins.
-- Return one result per app in the same order as provided.
-- Keep reason at 20 words or fewer.
-- Return only the structured result.
+- Use only the app name, package name, and icon
+- Return one result per app in the same order as provided
+- Keep reasons short
+- Keep using the existing output schema exactly
+- Map SAFE to suspicious=false and category="safe"
+- Map suspicious judgments to suspicious=true and category="suspicious", "adware_like", "impersonation", or "unknown" as appropriate
+- If the app looks like a fake or copy of a known brand, use category="impersonation"
+- Confidence must remain a number between 0 and 1
+- Return only the structured result
 `.trim();
 
 app.post("/scan-apps", async (req, res) => {
@@ -92,9 +93,9 @@ app.post("/scan-apps", async (req, res) => {
       {
         type: "input_text",
         text:
-          "Classify each app using the system rules. " +
-          "Return one structured result per app in the same order. " +
-          "Use only the app name, package name, and icon."
+          "Classify each app using the hierarchy in the system prompt. " +
+          "Return one result per app in the same order. " +
+          "Only use the app name, package name, and icon."
       }
     ];
 
@@ -145,18 +146,27 @@ app.post("/scan-apps", async (req, res) => {
                 items: {
                   type: "object",
                   properties: {
-                    app_name: { type: "string" },
-                    verdict: {
+                    appName: { type: "string" },
+                    packageName: { type: "string" },
+                    suspicious: { type: "boolean" },
+                    confidence: { type: "number" },
+                    category: {
                       type: "string",
-                      enum: ["SAFE", "SUSPICIOUS", "MALICIOUS"]
+                      enum: ["safe", "suspicious", "impersonation", "adware_like", "unknown"]
                     },
-                    confidence: {
-                      type: "string",
-                      enum: ["low", "medium", "high"]
-                    },
-                    reason: { type: "string" }
+                    reasons: {
+                      type: "array",
+                      items: { type: "string" }
+                    }
                   },
-                  required: ["app_name", "verdict", "confidence", "reason"],
+                  required: [
+                    "appName",
+                    "packageName",
+                    "suspicious",
+                    "confidence",
+                    "category",
+                    "reasons"
+                  ],
                   additionalProperties: false
                 }
               }
