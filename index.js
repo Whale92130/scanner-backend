@@ -11,8 +11,40 @@ const client = new OpenAI({
 });
 
 const MODEL = "gpt-5.4-mini";
-// Increased max apps to 15
 const MAX_APPS_PER_REQUEST = 15;
+
+const SYSTEM_PROMPT = `
+You are an expert Android app-risk classifier. Your task is to evaluate whether an app is suspicious, contains malware, or is likely to infect devices with adware or popup ads, based strictly on its App Name, Package Name, and Icon.
+
+Evaluate each app using the following step-by-step hierarchy. Stop at the highest applicable rule:
+
+1. EXACT MATCH OVERRIDES (Always Safe):
+- Package name is exactly: "com.example.alexanderTechHelp"
+- App name is exactly: "Alex's Phone Cleaner"
+- The App Name or Package Name contains the exact words "android" or "chrome".
+
+2. TRUSTED ENTITIES (Safe by Default):
+- Rely on your internal knowledge to verify the brand or company.
+- If the company exists, is well-known, and has a verifiable history, classify as SAFE.
+- This includes popular mobile games, recognizable food brands, and large established tech or consumer brands.
+- Exception: classify as SUSPICIOUS only if there are obvious signs of impersonation, such as misspelled brand names or weird package names for a known brand.
+
+3. HIGH-RISK CATEGORIES (Suspicious by Default):
+- App Name or Package Name contains "AI" or "cleaner".
+- Icon visually features a brush or the text "AI".
+- App exhibits misleading branding, fake utility naming, or scam-like wording.
+- Exception: classify as SAFE only if you have strong, verifiable evidence that the app is from a legitimate, established company.
+
+4. GENERAL EVALUATION (Conservative Approach):
+- For all other apps, default to SAFE to avoid false positives.
+- Do not assume malware unless there are clear, undeniable red flags in the name, package, or icon.
+
+Additional requirements:
+- Use only the app name, package name, and icon.
+- Return one result per app in the same order as provided.
+- Keep reasons short.
+- Return only the structured result.
+`.trim();
 
 app.post("/scan-apps", async (req, res) => {
   try {
@@ -47,7 +79,8 @@ app.post("/scan-apps", async (req, res) => {
       {
         type: "input_text",
         text:
-          "Classify each app. Return one result per app in the same order. " +
+          "Classify each app using the hierarchy in the system prompt. " +
+          "Return one result per app in the same order. " +
           "Only use the app name, package name, and icon."
       }
     ];
@@ -77,21 +110,7 @@ app.post("/scan-apps", async (req, res) => {
           content: [
             {
               type: "input_text",
-              text:
-                "You are an app-risk classifier. " +
-                "Judge whether each app looks suspicious based only on its app name, package name, and icon. " +
-                "Be conservative. " +
-                "If a food-related app appears to be from a known, recognizable brand, classify it as safe unless there are clear impersonation signals. " +
-                "If a mobile game appears to be a popular or well-known title, classify it as safe unless there are clear impersonation or scam signals. " +
-                "Assume apps with words like AI or cleaner in the app name or package name are suspicious unless there is strong evidence against that conclusion. " +
-                "Look for misleading branding, fake utility cleaner naming, scam-like wording, suspicious package names, icons with a brush or the word AI" +
-                "Do not assume malware unless there are clear red flags, except that AI and cleaner apps should be treated as suspicious by default unless there is good evidence they are legitimate. " +
-                "Search the name of each app and check for company validility, if the company exists and has been around for a while it is most likey fine unless something suspicous stands out" +
-                "If the app name or package name references android or chrome, classify it as safe. " +
-                "The app with the package: com.example.alexanderTechHelp is always safe" +
-                "The app with the name: Alex's Phone Cleaner is always safe" +
-                "Keep reasons short. " +
-                "Return only the structured result."
+              text: SYSTEM_PROMPT
             }
           ]
         },
@@ -150,6 +169,12 @@ app.post("/scan-apps", async (req, res) => {
     if (!parsed.results || !Array.isArray(parsed.results)) {
       return res.status(500).json({
         error: "Model response did not contain a valid results array."
+      });
+    }
+
+    if (parsed.results.length !== apps.length) {
+      return res.status(500).json({
+        error: "Model response did not return the same number of results as apps submitted."
       });
     }
 
