@@ -36,7 +36,7 @@ Use this research to inform your verdict:
 ## STEP 2 — CLASSIFICATION RULES (apply in order; first match wins)
 
 ### 1. ALWAYS SAFE (hardcoded overrides)
-- Package name: com.example.alexanderTechHelp → SAFE
+- Package name: com.alexander.phonescan → SAFE
 - App name: "Alex's Phone Cleaner" → SAFE
 - Package name or app name contains "android" or "chrome" → SAFE
 
