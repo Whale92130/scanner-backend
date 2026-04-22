@@ -81,10 +81,6 @@ function normalizeString(value) {
 }
 
 function inferFeedbackDecision(body) {
-  // Accept several shapes so your app can send whatever is easiest:
-  // 1) suspicious: true/false
-  // 2) isGood: true/false
-  // 3) finalLabel: "safe" / "bad" / "suspicious" / "impersonation" / etc.
   let suspicious;
   let category;
 
@@ -460,6 +456,20 @@ app.post("/scan-apps", async (req, res) => {
         error: "Server failed to build a complete results array."
       });
     }
+
+    // --- RESTORED FIREBASE LOGIC ---
+    try {
+      const scanDocRef = db.collection("scans").doc(); 
+      await scanDocRef.set({
+        timestamp: FieldValue.serverTimestamp(),
+        totalAppsScanned: finalResults.length,
+        results: finalResults
+      });
+      console.log(`Successfully saved scan batch ${scanDocRef.id} to Firestore.`);
+    } catch (dbError) {
+      console.error("Failed to save to Firebase:", dbError);
+    }
+    // -------------------------------
 
     res.json({
       results: finalResults
