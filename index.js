@@ -457,20 +457,6 @@ app.post("/scan-apps", async (req, res) => {
       });
     }
 
-    // --- RESTORED FIREBASE LOGIC ---
-    try {
-      const scanDocRef = db.collection("scans").doc(); 
-      await scanDocRef.set({
-        timestamp: FieldValue.serverTimestamp(),
-        totalAppsScanned: finalResults.length,
-        results: finalResults
-      });
-      console.log(`Successfully saved scan batch ${scanDocRef.id} to Firestore.`);
-    } catch (dbError) {
-      console.error("Failed to save to Firebase:", dbError);
-    }
-    // -------------------------------
-
     res.json({
       results: finalResults
     });
