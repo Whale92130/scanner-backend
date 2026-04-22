@@ -80,6 +80,12 @@ function normalizeString(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizeCategory(value, fallbackSuspicious = false) {
+  const normalized = normalizeString(value).toLowerCase();
+  if (VALID_CATEGORIES.has(normalized)) return normalized;
+  return fallbackSuspicious ? "suspicious" : "safe";
+}
+
 function inferFeedbackDecision(body) {
   let suspicious;
   let category;
@@ -110,37 +116,72 @@ function inferFeedbackDecision(body) {
     category = suspicious ? "suspicious" : "safe";
   }
 
-  return { suspicious, category };
+  return {
+    suspicious,
+    category: normalizeCategory(category, suspicious)
+  };
+}
+
+function getEffectiveFeedbackState(raw = {}) {
+  const adminSafeLocked = Boolean(raw.adminSafeLocked);
+
+  if (adminSafeLocked) {
+    return {
+      suspicious: false,
+      category: "safe",
+      adminSafeLocked: true
+    };
+  }
+
+  const suspicious = Boolean(raw.suspicious);
+  const category = normalizeCategory(raw.category, suspicious);
+
+  return {
+    suspicious,
+    category,
+    adminSafeLocked: false
+  };
 }
 
 function feedbackDocToResponse(doc) {
   if (!doc || !doc.exists) return null;
+
   const data = doc.data();
+  const effective = getEffectiveFeedbackState(data);
 
   return {
     appName: data.appName,
     packageName: data.packageName,
-    suspicious: Boolean(data.suspicious),
-    category: VALID_CATEGORIES.has(data.category) ? data.category : (data.suspicious ? "suspicious" : "safe"),
+    suspicious: effective.suspicious,
+    category: effective.category,
+    adminSafeLocked: effective.adminSafeLocked,
     notes: Array.isArray(data.notes) ? data.notes : [],
     source: data.source || "feedback_db",
     updatedAt: data.updatedAt ?? null,
-    lastUserDecision: data.lastUserDecision ?? null
+    lastUserDecision: data.lastUserDecision ?? null,
+    lastUpdatedByAdmin: Boolean(data.lastUpdatedByAdmin)
   };
 }
 
 function feedbackToScanResult(appItem, feedback) {
+  const effective = getEffectiveFeedbackState(feedback);
+
+  let reason;
+  if (effective.adminSafeLocked) {
+    reason = "Admin-marked safe override";
+  } else if (effective.suspicious) {
+    reason = "Stored harmful-app feedback";
+  } else {
+    reason = "Stored safe-app feedback";
+  }
+
   return {
     appName: appItem.appName,
     packageName: appItem.packageName,
-    suspicious: Boolean(feedback.suspicious),
+    suspicious: effective.suspicious,
     confidence: 0.99,
-    category: VALID_CATEGORIES.has(feedback.category)
-      ? feedback.category
-      : (feedback.suspicious ? "suspicious" : "safe"),
-    reasons: feedback.suspicious
-      ? ["Stored harmful-app feedback"]
-      : ["Stored safe-app feedback"]
+    category: effective.category,
+    reasons: [reason]
   };
 }
 
@@ -163,6 +204,7 @@ async function loadFeedbackMapByPackages(packageNames) {
       map[snap.id] = snap.data();
     }
   }
+
   return map;
 }
 
@@ -273,7 +315,8 @@ app.get("/health", async (_req, res) => {
   res.json({
     ok: true,
     model: MODEL,
-    firestore: true
+    firestore: true,
+    adminSafeLocks: true
   });
 });
 
@@ -285,6 +328,7 @@ app.post("/feedback", async (req, res) => {
       ? req.body.notes.map(normalizeString).filter(Boolean)
       : [];
     const userDecision = normalizeString(req.body.userDecision) || null;
+    const isAdmin = req.body.isAdmin === true;
 
     if (!appName || !packageName) {
       return res.status(400).json({
@@ -300,32 +344,103 @@ app.post("/feedback", async (req, res) => {
       });
     }
 
-    const payload = {
-      appName,
-      packageName,
-      suspicious: parsedDecision.suspicious,
-      category: parsedDecision.category,
-      notes,
-      source: "user_feedback",
-      lastUserDecision: userDecision,
-      updatedAt: FieldValue.serverTimestamp()
-    };
+    const ref = db.collection("app_feedback").doc(packageName);
 
-    await db.collection("app_feedback").doc(packageName).set(payload, { merge: true });
+    let responseSaved = null;
+    let ignoredDueToAdminLock = false;
+
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const existing = snap.exists ? snap.data() : {};
+      const existingState = getEffectiveFeedbackState(existing);
+
+      if (!isAdmin && existingState.adminSafeLocked && parsedDecision.suspicious) {
+        ignoredDueToAdminLock = true;
+
+        tx.set(
+          ref,
+          {
+            appName,
+            packageName,
+            lastIgnoredUserDecision: userDecision,
+            lastIgnoredAt: FieldValue.serverTimestamp(),
+            lastIgnoredByAdminLock: true,
+            notes
+          },
+          { merge: true }
+        );
+
+        responseSaved = {
+          appName,
+          packageName,
+          suspicious: false,
+          category: "safe",
+          adminSafeLocked: true
+        };
+        return;
+      }
+
+      const shouldLockAdminSafe = isAdmin && !parsedDecision.suspicious;
+      const shouldClearAdminSafeLock = isAdmin && parsedDecision.suspicious;
+
+      const payload = {
+        appName,
+        packageName,
+        suspicious: shouldLockAdminSafe ? false : parsedDecision.suspicious,
+        category: shouldLockAdminSafe
+          ? "safe"
+          : normalizeCategory(parsedDecision.category, parsedDecision.suspicious),
+        notes,
+        source: isAdmin ? "admin_feedback" : "user_feedback",
+        lastUserDecision: userDecision,
+        updatedAt: FieldValue.serverTimestamp(),
+        lastUpdatedByAdmin: isAdmin,
+        adminSafeLocked:
+          shouldLockAdminSafe
+            ? true
+            : shouldClearAdminSafeLock
+              ? false
+              : existingState.adminSafeLocked && !parsedDecision.suspicious
+      };
+
+      if (shouldLockAdminSafe) {
+        payload.adminSafeLockedAt = FieldValue.serverTimestamp();
+        payload.adminSafeLockedBy = "admin";
+      } else if (shouldClearAdminSafeLock) {
+        payload.adminSafeLockedAt = FieldValue.delete();
+        payload.adminSafeLockedBy = FieldValue.delete();
+      }
+
+      tx.set(ref, payload, { merge: true });
+
+      responseSaved = {
+        appName,
+        packageName,
+        suspicious: Boolean(payload.suspicious),
+        category: payload.category,
+        adminSafeLocked: Boolean(payload.adminSafeLocked)
+      };
+    });
 
     await db.collection("feedback_events").add({
-      ...payload,
+      appName,
+      packageName,
+      notes,
+      requestedSuspicious: parsedDecision.suspicious,
+      requestedCategory: parsedDecision.category,
+      userDecision,
+      isAdmin,
+      ignoredDueToAdminLock,
+      savedSuspicious: responseSaved.suspicious,
+      savedCategory: responseSaved.category,
+      savedAdminSafeLocked: responseSaved.adminSafeLocked,
       createdAt: FieldValue.serverTimestamp()
     });
 
     res.json({
       ok: true,
-      saved: {
-        appName,
-        packageName,
-        suspicious: parsedDecision.suspicious,
-        category: parsedDecision.category
-      }
+      ignoredDueToAdminLock,
+      saved: responseSaved
     });
   } catch (error) {
     console.error("POST /feedback failed:", error);
@@ -379,9 +494,20 @@ app.post("/feedback/batch-lookup", async (req, res) => {
     }
 
     const feedbackMap = await loadFeedbackMapByPackages(packageNames);
+    const results = {};
+
+    for (const pkg of [...new Set(packageNames)]) {
+      const raw = feedbackMap[pkg];
+      const effective = raw ? getEffectiveFeedbackState(raw) : null;
+
+      results[pkg] = {
+        isFlagged: effective ? effective.suspicious : false,
+        isAdminSafe: effective ? effective.adminSafeLocked : false
+      };
+    }
 
     res.json({
-      feedback: feedbackMap
+      results
     });
   } catch (error) {
     console.error("POST /feedback/batch-lookup failed:", error);
